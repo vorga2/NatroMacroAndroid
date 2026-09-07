@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: natro-android-build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -35,12 +39,29 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Build debug APK
+      - name: Build unsigned debug APK
         run: gradle --no-daemon :app:assembleDebug
+
+      - name: Recreate stable development signing key
+        run: python3 ci/generate_signing_key.py "$RUNNER_TEMP/natro-dev-key.pk8"
+
+      - name: Sign APK with stable development certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          UNSIGNED="app/build/outputs/apk/debug/app-debug-unsigned.apk"
+          SIGNED="app/build/outputs/apk/debug/NatroMacroAndroid-v0.2.2-debug.apk"
+          test -f "$UNSIGNED"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign \
+            --key "$RUNNER_TEMP/natro-dev-key.pk8" \
+            --cert ci/natro-dev-cert.pem \
+            --out "$SIGNED" \
+            "$UNSIGNED"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$SIGNED"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: NatroMacroAndroid-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: NatroMacroAndroid-v0.2.2-apk
+          path: app/build/outputs/apk/debug/NatroMacroAndroid-v0.2.2-debug.apk
           if-no-files-found: error
