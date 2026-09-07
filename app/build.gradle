@@ -10,7 +10,15 @@ android {
         applicationId 'dev.vorga.natromobile'
         minSdk 30
         targetSdk 35
-        versionCode 3
-        versionName '0.2.1'
+        versionCode 4
+        versionName '0.2.2'
+    }
+
+    buildTypes {
+        debug {
+            // CI signs the APK after build with a reproducible development key.
+            // This keeps the signing certificate stable between GitHub runners.
+            signingConfig null
+        }
     }
 }
