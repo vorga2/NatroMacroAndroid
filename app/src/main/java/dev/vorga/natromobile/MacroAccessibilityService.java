@@ -9,6 +9,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.view.accessibility.AccessibilityEvent;
+import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.Toast;
 
 import java.util.List;
@@ -20,19 +21,19 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class MacroAccessibilityService extends AccessibilityService {
     private static final String ROBLOX_PACKAGE = "com.roblox.client";
-    private static final long SAFE_GESTURE_SLICE_MS = 120L;
+    private static final long HOLD_SLICE_MS = 300L;
+    private static final long INITIAL_DRAG_MS = 70L;
 
     private static volatile MacroAccessibilityService instance;
+
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final Handler main = new Handler(Looper.getMainLooper());
 
     private volatile String foregroundPackage = "";
-    // Safety must only become strict after Roblox has actually been reached.
-    // During the hand-off MainActivity -> Roblox Android may briefly report
-    // launcher/SystemUI windows. Treating those as "left Roblox" caused the
-    // v0.2 startup race where the macro silently stopped before it started.
     private volatile boolean robloxSessionActive = false;
+    private volatile int activeJoyX = -1;
+    private volatile int activeJoyY = -1;
 
     static MacroAccessibilityService get() {
         return instance;
@@ -42,24 +43,32 @@ public class MacroAccessibilityService extends AccessibilityService {
     protected void onServiceConnected() {
         super.onServiceConnected();
         instance = this;
+        refreshForegroundPackage();
     }
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
-        if (event == null || event.getPackageName() == null) return;
+        if (event == null) return;
         int type = event.getEventType();
         if (type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
-                && type != AccessibilityEvent.TYPE_WINDOWS_CHANGED) return;
+                && type != AccessibilityEvent.TYPE_WINDOWS_CHANGED
+                && type != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+            return;
+        }
 
-        String pkg = event.getPackageName().toString();
-        // Our floating STOP/calibration overlay is not a real app switch.
-        if (getPackageName().equals(pkg)) return;
+        String rootPackage = packageFromActiveRoot();
+        String eventPackage = event.getPackageName() == null ? "" : event.getPackageName().toString();
+        String pkg = !rootPackage.isEmpty() ? rootPackage : eventPackage;
 
-        foregroundPackage = pkg;
+        // Our own floating controls/calibration do not count as leaving Roblox.
+        if (!pkg.isEmpty() && !getPackageName().equals(pkg)) {
+            foregroundPackage = pkg;
+        }
 
-        // Before the run has positively entered Roblox we are only ARMED.
-        // Do not cancel on launcher/SystemUI transition windows.
-        if (running.get() && robloxSessionActive && !ROBLOX_PACKAGE.equals(pkg)) {
+        // Only enforce Roblox-only mode after Roblox has actually been detected.
+        // Before that the macro is merely ARMED and may safely pass through the
+        // launcher/SystemUI while MainActivity opens Roblox.
+        if (running.get() && robloxSessionActive && !isRobloxForeground()) {
             stopMacro();
         }
     }
@@ -79,23 +88,24 @@ public class MacroAccessibilityService extends AccessibilityService {
 
     void startMacroAfterDelay(long delayMs) {
         if (!running.compareAndSet(false, true)) {
-            showToast("Natro Mobile is already starting/running.");
+            showToast("Natro Mobile is already armed/running.");
             return;
         }
-        robloxSessionActive = false;
 
+        robloxSessionActive = false;
         worker.execute(() -> {
             try {
-                if (!sleepWhileRunning(Math.max(0, delayMs))) return;
+                showToast("Natro Mobile: ARMED — waiting for Roblox");
 
-                // We now tolerate launcher/SystemUI during startup and wait for
-                // an actual Roblox foreground event instead of cancelling early.
-                if (!waitForRobloxForeground(15_000L)) {
-                    showToast("Roblox foreground was not detected. Open Roblox and press START again.");
-                    return;
-                }
+                // No timeout. On Samsung the foreground Accessibility event can
+                // arrive late. The floating STOP remains available while armed.
+                if (!waitForRobloxForeground()) return;
 
                 robloxSessionActive = true;
+                showToast("Roblox detected — macro starts in " + Math.max(0, delayMs / 1000) + "s");
+                if (!sleepWhileRunning(Math.max(0, delayMs))) return;
+                if (!isRobloxForeground()) return;
+
                 showToast("Natro Mobile: RUNNING");
                 runConfiguredPatternLoop();
             } finally {
@@ -107,8 +117,14 @@ public class MacroAccessibilityService extends AccessibilityService {
     }
 
     void stopMacro() {
+        boolean wasInRoblox = robloxSessionActive && ROBLOX_PACKAGE.equals(foregroundPackage);
         running.set(false);
         robloxSessionActive = false;
+
+        // A continued Accessibility stroke intentionally keeps the virtual
+        // finger down. Dispatching one tiny neutral gesture cancels it. This is
+        // only done while Roblox is still the foreground app.
+        if (wasInRoblox) cancelActiveJoystickGesture();
     }
 
     boolean isRunningMacro() {
@@ -116,16 +132,39 @@ public class MacroAccessibilityService extends AccessibilityService {
     }
 
     boolean isRobloxForeground() {
+        refreshForegroundPackage();
         return ROBLOX_PACKAGE.equals(foregroundPackage);
     }
 
-    private boolean waitForRobloxForeground(long timeoutMs) {
-        long deadline = SystemClock.uptimeMillis() + timeoutMs;
-        while (running.get() && SystemClock.uptimeMillis() < deadline) {
+    private boolean waitForRobloxForeground() {
+        while (running.get()) {
             if (isRobloxForeground()) return true;
-            if (!sleepWhileRunning(50)) return false;
+            if (!sleepWhileRunning(100)) return false;
         }
         return false;
+    }
+
+    private void refreshForegroundPackage() {
+        String pkg = packageFromActiveRoot();
+        if (!pkg.isEmpty() && !getPackageName().equals(pkg)) {
+            foregroundPackage = pkg;
+        }
+    }
+
+    private String packageFromActiveRoot() {
+        AccessibilityNodeInfo root = null;
+        try {
+            root = getRootInActiveWindow();
+            if (root != null && root.getPackageName() != null) {
+                return root.getPackageName().toString();
+            }
+        } catch (Exception ignored) {
+        } finally {
+            if (root != null) {
+                try { root.recycle(); } catch (Exception ignored) {}
+            }
+        }
+        return "";
     }
 
     private void runConfiguredPatternLoop() {
@@ -144,6 +183,9 @@ public class MacroAccessibilityService extends AccessibilityService {
             return;
         }
 
+        activeJoyX = cx;
+        activeJoyY = cy;
+
         long deadline = System.currentTimeMillis() + Math.max(10, runSeconds) * 1000L;
         List<PatternStep> steps = PatternFactory.create(pattern, size, reps);
 
@@ -152,17 +194,20 @@ public class MacroAccessibilityService extends AccessibilityService {
                 if (!sleepWhileRunning(100)) break;
                 continue;
             }
+
             for (PatternStep step : steps) {
                 if (!canControlRoblox() || System.currentTimeMillis() >= deadline) break;
+
                 long ms = durationForTiles(step.tiles, speed);
                 float len = (float) Math.sqrt(step.x * step.x + step.y * step.y);
                 if (len <= 0.0001f) {
                     if (!sleepWhileRunning(Math.min(ms, 250))) break;
                     continue;
                 }
+
                 float dx = step.x / len * radius;
                 float dy = step.y / len * radius;
-                holdJoystickSafely(cx, cy, cx + dx, cy + dy, ms);
+                if (!holdJoystickContinuously(cx, cy, cx + dx, cy + dy, ms)) break;
             }
         }
     }
@@ -174,18 +219,56 @@ public class MacroAccessibilityService extends AccessibilityService {
     private long durationForTiles(double tiles, float moveSpeed) {
         double studs = tiles * 4.0;
         double seconds = studs / Math.max(1.0, moveSpeed);
-        return Math.max(80L, Math.round(seconds * 1000.0));
+        return Math.max(100L, Math.round(seconds * 1000.0));
     }
 
-    private void holdJoystickSafely(float cx, float cy, float tx, float ty, long totalMs) {
+    /**
+     * Mobile Roblox needs a real held thumbstick, not a stream of independent
+     * 120 ms swipes. We drag from the calibrated joystick center to the target,
+     * then continue the SAME Accessibility stroke in short checked slices.
+     * Every slice re-checks that Roblox is foreground, so another app never
+     * receives macro touches.
+     */
+    private boolean holdJoystickContinuously(float cx, float cy, float tx, float ty, long totalMs) {
+        if (!canControlRoblox()) return false;
+
+        long dragMs = Math.min(INITIAL_DRAG_MS, Math.max(1L, totalMs));
+        long remaining = Math.max(0L, totalMs - dragMs);
+        boolean continueAfterDrag = remaining > 0;
+
+        GestureDescription.StrokeDescription stroke = new GestureDescription.StrokeDescription(
+                line(cx, cy, tx, ty), 0, dragMs, continueAfterDrag);
+        if (!dispatchAndWaitRobloxOnly(stroke, dragMs + 250L)) return false;
+
+        while (canControlRoblox() && remaining > 0) {
+            long chunk = Math.min(HOLD_SLICE_MS, remaining);
+            remaining -= chunk;
+            boolean willContinue = remaining > 0;
+
+            try {
+                stroke = stroke.continueStroke(holdPath(tx, ty), 0, Math.max(1L, chunk), willContinue);
+            } catch (IllegalStateException | IllegalArgumentException e) {
+                // Fallback for vendor Android builds that reject continued
+                // strokes: use a longer normal joystick drag so movement still
+                // works, while remaining Roblox-only.
+                return holdJoystickFallback(cx, cy, tx, ty, chunk + remaining);
+            }
+
+            if (!dispatchAndWaitRobloxOnly(stroke, chunk + 250L)) return false;
+        }
+        return true;
+    }
+
+    private boolean holdJoystickFallback(float cx, float cy, float tx, float ty, long totalMs) {
         long remaining = totalMs;
         while (canControlRoblox() && remaining > 0) {
-            long chunk = Math.min(SAFE_GESTURE_SLICE_MS, remaining);
+            long chunk = Math.min(600L, remaining);
             GestureDescription.StrokeDescription stroke = new GestureDescription.StrokeDescription(
-                    line(cx, cy, tx, ty), 0, Math.max(1L, chunk), false);
-            if (!dispatchAndWaitRobloxOnly(stroke, chunk + 120L)) return;
+                    line(cx, cy, tx, ty), 0, Math.max(80L, chunk), false);
+            if (!dispatchAndWaitRobloxOnly(stroke, chunk + 250L)) return false;
             remaining -= chunk;
         }
+        return true;
     }
 
     private boolean dispatchAndWaitRobloxOnly(GestureDescription.StrokeDescription stroke, long timeoutMs) {
@@ -207,12 +290,16 @@ public class MacroAccessibilityService extends AccessibilityService {
                 latch.countDown();
             }
         }, main);
-        if (!accepted) return false;
+
+        if (!accepted) {
+            showToast("Android rejected the joystick gesture.");
+            return false;
+        }
 
         long deadline = SystemClock.uptimeMillis() + Math.max(50L, timeoutMs);
         while (canControlRoblox() && SystemClock.uptimeMillis() < deadline) {
             try {
-                if (latch.await(25, TimeUnit.MILLISECONDS)) return ok.get();
+                if (latch.await(20, TimeUnit.MILLISECONDS)) return ok.get();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return false;
@@ -221,10 +308,39 @@ public class MacroAccessibilityService extends AccessibilityService {
         return false;
     }
 
+    private void cancelActiveJoystickGesture() {
+        if (!ROBLOX_PACKAGE.equals(foregroundPackage)) return;
+        final int cx = activeJoyX;
+        final int cy = activeJoyY;
+        if (cx < 0 || cy < 0) return;
+
+        main.post(() -> {
+            if (!ROBLOX_PACKAGE.equals(foregroundPackage)) return;
+            Path p = new Path();
+            p.moveTo(cx, cy);
+            p.lineTo(cx + 1f, cy);
+            GestureDescription.StrokeDescription neutral =
+                    new GestureDescription.StrokeDescription(p, 0, 1, false);
+            try {
+                dispatchGesture(new GestureDescription.Builder().addStroke(neutral).build(), null, null);
+            } catch (Exception ignored) {}
+        });
+    }
+
     private static Path line(float x1, float y1, float x2, float y2) {
         Path p = new Path();
         p.moveTo(x1, y1);
         p.lineTo(x2, y2);
+        return p;
+    }
+
+    private static Path holdPath(float x, float y) {
+        Path p = new Path();
+        p.moveTo(x, y);
+        // Tiny round trip gives Android a non-empty continuation path while
+        // being visually indistinguishable from holding the stick still.
+        p.lineTo(x + 0.25f, y);
+        p.lineTo(x, y);
         return p;
     }
 
