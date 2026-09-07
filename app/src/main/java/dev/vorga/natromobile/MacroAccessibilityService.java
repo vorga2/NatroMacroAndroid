@@ -9,6 +9,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.view.accessibility.AccessibilityEvent;
+import android.widget.Toast;
 
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -26,10 +27,12 @@ public class MacroAccessibilityService extends AccessibilityService {
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final Handler main = new Handler(Looper.getMainLooper());
 
-    // Updated only from real foreground-window changes. Events from our own
-    // floating STOP/calibration overlay are ignored so they do not falsely
-    // look like leaving Roblox.
     private volatile String foregroundPackage = "";
+    // Safety must only become strict after Roblox has actually been reached.
+    // During the hand-off MainActivity -> Roblox Android may briefly report
+    // launcher/SystemUI windows. Treating those as "left Roblox" caused the
+    // v0.2 startup race where the macro silently stopped before it started.
+    private volatile boolean robloxSessionActive = false;
 
     static MacroAccessibilityService get() {
         return instance;
@@ -44,18 +47,20 @@ public class MacroAccessibilityService extends AccessibilityService {
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
         if (event == null || event.getPackageName() == null) return;
-        if (event.getEventType() != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return;
+        int type = event.getEventType();
+        if (type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+                && type != AccessibilityEvent.TYPE_WINDOWS_CHANGED) return;
 
         String pkg = event.getPackageName().toString();
-        // Our overlay/activity can create accessibility events while Roblox is
-        // still behind it. Ignore our own package for foreground tracking.
+        // Our floating STOP/calibration overlay is not a real app switch.
         if (getPackageName().equals(pkg)) return;
 
         foregroundPackage = pkg;
-        if (running.get() && !ROBLOX_PACKAGE.equals(pkg)) {
-            // Safety first: as soon as another real app becomes foreground,
-            // stop the state machine. No new gesture can be dispatched there.
-            running.set(false);
+
+        // Before the run has positively entered Roblox we are only ARMED.
+        // Do not cancel on launcher/SystemUI transition windows.
+        if (running.get() && robloxSessionActive && !ROBLOX_PACKAGE.equals(pkg)) {
+            stopMacro();
         }
     }
 
@@ -73,15 +78,29 @@ public class MacroAccessibilityService extends AccessibilityService {
     }
 
     void startMacroAfterDelay(long delayMs) {
-        if (!running.compareAndSet(false, true)) return;
+        if (!running.compareAndSet(false, true)) {
+            showToast("Natro Mobile is already starting/running.");
+            return;
+        }
+        robloxSessionActive = false;
+
         worker.execute(() -> {
             try {
                 if (!sleepWhileRunning(Math.max(0, delayMs))) return;
-                // Do not start until Roblox has actually become the active app.
-                if (!waitForRobloxForeground(12_000L)) return;
+
+                // We now tolerate launcher/SystemUI during startup and wait for
+                // an actual Roblox foreground event instead of cancelling early.
+                if (!waitForRobloxForeground(15_000L)) {
+                    showToast("Roblox foreground was not detected. Open Roblox and press START again.");
+                    return;
+                }
+
+                robloxSessionActive = true;
+                showToast("Natro Mobile: RUNNING");
                 runConfiguredPatternLoop();
             } finally {
                 running.set(false);
+                robloxSessionActive = false;
                 stopOverlay();
             }
         });
@@ -89,6 +108,7 @@ public class MacroAccessibilityService extends AccessibilityService {
 
     void stopMacro() {
         running.set(false);
+        robloxSessionActive = false;
     }
 
     boolean isRunningMacro() {
@@ -119,7 +139,11 @@ public class MacroAccessibilityService extends AccessibilityService {
         int runSeconds = p.getInt("run_seconds", 900);
         String pattern = p.getString("pattern", "Snake");
 
-        if (cx < 0 || cy < 0) return;
+        if (cx < 0 || cy < 0) {
+            showToast("Joystick calibration is missing.");
+            return;
+        }
+
         long deadline = System.currentTimeMillis() + Math.max(10, runSeconds) * 1000L;
         List<PatternStep> steps = PatternFactory.create(pattern, size, reps);
 
@@ -144,28 +168,15 @@ public class MacroAccessibilityService extends AccessibilityService {
     }
 
     private boolean canControlRoblox() {
-        return running.get() && isRobloxForeground();
+        return running.get() && robloxSessionActive && isRobloxForeground();
     }
 
     private long durationForTiles(double tiles, float moveSpeed) {
-        // Natro Walk() treats one pattern tile as 4 Roblox studs.
         double studs = tiles * 4.0;
         double seconds = studs / Math.max(1.0, moveSpeed);
         return Math.max(80L, Math.round(seconds * 1000.0));
     }
 
-    /**
-     * Safety-oriented joystick hold.
-     *
-     * The old implementation could enqueue a continued gesture for up to
-     * three seconds. If Android switched apps during that gesture, the touch
-     * could appear to be "stuck" outside Roblox. We now emit short, complete
-     * gesture slices. Every slice lifts the virtual finger and the next slice
-     * is allowed only while Roblox is still the foreground package.
-     *
-     * This intentionally favours safety over perfectly continuous input. The
-     * movement engine can compensate for the tiny gaps during calibration.
-     */
     private void holdJoystickSafely(float cx, float cy, float tx, float ty, long totalMs) {
         long remaining = totalMs;
         while (canControlRoblox() && remaining > 0) {
@@ -178,7 +189,6 @@ public class MacroAccessibilityService extends AccessibilityService {
     }
 
     private boolean dispatchAndWaitRobloxOnly(GestureDescription.StrokeDescription stroke, long timeoutMs) {
-        // Critical guard: dispatchGesture is never called outside Roblox.
         if (!canControlRoblox()) return false;
 
         CountDownLatch latch = new CountDownLatch(1);
@@ -230,6 +240,10 @@ public class MacroAccessibilityService extends AccessibilityService {
             }
         }
         return running.get();
+    }
+
+    private void showToast(String text) {
+        main.post(() -> Toast.makeText(getApplicationContext(), text, Toast.LENGTH_LONG).show());
     }
 
     private void stopOverlay() {
