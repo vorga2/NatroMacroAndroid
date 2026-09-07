@@ -2,12 +2,12 @@ package dev.vorga.natromobile;
 
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.GestureDescription;
-import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Path;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.view.accessibility.AccessibilityEvent;
 
 import java.util.List;
@@ -18,10 +18,18 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class MacroAccessibilityService extends AccessibilityService {
+    private static final String ROBLOX_PACKAGE = "com.roblox.client";
+    private static final long SAFE_GESTURE_SLICE_MS = 120L;
+
     private static volatile MacroAccessibilityService instance;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final Handler main = new Handler(Looper.getMainLooper());
+
+    // Updated only from real foreground-window changes. Events from our own
+    // floating STOP/calibration overlay are ignored so they do not falsely
+    // look like leaving Roblox.
+    private volatile String foregroundPackage = "";
 
     static MacroAccessibilityService get() {
         return instance;
@@ -34,7 +42,22 @@ public class MacroAccessibilityService extends AccessibilityService {
     }
 
     @Override
-    public void onAccessibilityEvent(AccessibilityEvent event) {}
+    public void onAccessibilityEvent(AccessibilityEvent event) {
+        if (event == null || event.getPackageName() == null) return;
+        if (event.getEventType() != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return;
+
+        String pkg = event.getPackageName().toString();
+        // Our overlay/activity can create accessibility events while Roblox is
+        // still behind it. Ignore our own package for foreground tracking.
+        if (getPackageName().equals(pkg)) return;
+
+        foregroundPackage = pkg;
+        if (running.get() && !ROBLOX_PACKAGE.equals(pkg)) {
+            // Safety first: as soon as another real app becomes foreground,
+            // stop the state machine. No new gesture can be dispatched there.
+            running.set(false);
+        }
+    }
 
     @Override
     public void onInterrupt() {
@@ -53,10 +76,10 @@ public class MacroAccessibilityService extends AccessibilityService {
         if (!running.compareAndSet(false, true)) return;
         worker.execute(() -> {
             try {
-                Thread.sleep(Math.max(0, delayMs));
+                if (!sleepWhileRunning(Math.max(0, delayMs))) return;
+                // Do not start until Roblox has actually become the active app.
+                if (!waitForRobloxForeground(12_000L)) return;
                 runConfiguredPatternLoop();
-            } catch (InterruptedException ignored) {
-                Thread.currentThread().interrupt();
             } finally {
                 running.set(false);
                 stopOverlay();
@@ -70,6 +93,19 @@ public class MacroAccessibilityService extends AccessibilityService {
 
     boolean isRunningMacro() {
         return running.get();
+    }
+
+    boolean isRobloxForeground() {
+        return ROBLOX_PACKAGE.equals(foregroundPackage);
+    }
+
+    private boolean waitForRobloxForeground(long timeoutMs) {
+        long deadline = SystemClock.uptimeMillis() + timeoutMs;
+        while (running.get() && SystemClock.uptimeMillis() < deadline) {
+            if (isRobloxForeground()) return true;
+            if (!sleepWhileRunning(50)) return false;
+        }
+        return false;
     }
 
     private void runConfiguredPatternLoop() {
@@ -87,20 +123,28 @@ public class MacroAccessibilityService extends AccessibilityService {
         long deadline = System.currentTimeMillis() + Math.max(10, runSeconds) * 1000L;
         List<PatternStep> steps = PatternFactory.create(pattern, size, reps);
 
-        while (running.get() && System.currentTimeMillis() < deadline) {
+        while (canControlRoblox() && System.currentTimeMillis() < deadline) {
             if (steps.isEmpty()) {
-                sleepChecked(500);
+                if (!sleepWhileRunning(100)) break;
                 continue;
             }
             for (PatternStep step : steps) {
-                if (!running.get() || System.currentTimeMillis() >= deadline) break;
+                if (!canControlRoblox() || System.currentTimeMillis() >= deadline) break;
                 long ms = durationForTiles(step.tiles, speed);
                 float len = (float) Math.sqrt(step.x * step.x + step.y * step.y);
+                if (len <= 0.0001f) {
+                    if (!sleepWhileRunning(Math.min(ms, 250))) break;
+                    continue;
+                }
                 float dx = step.x / len * radius;
                 float dy = step.y / len * radius;
-                holdJoystick(cx, cy, cx + dx, cy + dy, ms);
+                holdJoystickSafely(cx, cy, cx + dx, cy + dy, ms);
             }
         }
+    }
+
+    private boolean canControlRoblox() {
+        return running.get() && isRobloxForeground();
     }
 
     private long durationForTiles(double tiles, float moveSpeed) {
@@ -110,36 +154,37 @@ public class MacroAccessibilityService extends AccessibilityService {
         return Math.max(80L, Math.round(seconds * 1000.0));
     }
 
-    private void holdJoystick(float cx, float cy, float tx, float ty, long totalMs) {
-        if (!running.get()) return;
-        long settleMs = Math.min(120L, Math.max(70L, totalMs / 4));
-        boolean needsContinuation = totalMs > settleMs;
-        GestureDescription.StrokeDescription stroke = new GestureDescription.StrokeDescription(
-                line(cx, cy, tx, ty), 0, settleMs, needsContinuation);
-        if (!dispatchAndWait(stroke)) return;
-
-        long remaining = Math.max(0, totalMs - settleMs);
-        while (running.get() && remaining > 0) {
-            long chunk = Math.min(3000L, remaining);
-            boolean continues = remaining > chunk;
-            stroke = stroke.continueStroke(point(tx, ty), 0, chunk, continues);
-            if (!dispatchAndWait(stroke)) return;
+    /**
+     * Safety-oriented joystick hold.
+     *
+     * The old implementation could enqueue a continued gesture for up to
+     * three seconds. If Android switched apps during that gesture, the touch
+     * could appear to be "stuck" outside Roblox. We now emit short, complete
+     * gesture slices. Every slice lifts the virtual finger and the next slice
+     * is allowed only while Roblox is still the foreground package.
+     *
+     * This intentionally favours safety over perfectly continuous input. The
+     * movement engine can compensate for the tiny gaps during calibration.
+     */
+    private void holdJoystickSafely(float cx, float cy, float tx, float ty, long totalMs) {
+        long remaining = totalMs;
+        while (canControlRoblox() && remaining > 0) {
+            long chunk = Math.min(SAFE_GESTURE_SLICE_MS, remaining);
+            GestureDescription.StrokeDescription stroke = new GestureDescription.StrokeDescription(
+                    line(cx, cy, tx, ty), 0, Math.max(1L, chunk), false);
+            if (!dispatchAndWaitRobloxOnly(stroke, chunk + 120L)) return;
             remaining -= chunk;
-        }
-
-        // If the last segment was marked continue because stop arrived mid-loop, release quickly.
-        if (!running.get() && remaining > 0) {
-            try {
-                GestureDescription.StrokeDescription release = stroke.continueStroke(point(tx, ty), 0, 1, false);
-                dispatchAndWait(release);
-            } catch (IllegalStateException ignored) {}
         }
     }
 
-    private boolean dispatchAndWait(GestureDescription.StrokeDescription stroke) {
+    private boolean dispatchAndWaitRobloxOnly(GestureDescription.StrokeDescription stroke, long timeoutMs) {
+        // Critical guard: dispatchGesture is never called outside Roblox.
+        if (!canControlRoblox()) return false;
+
         CountDownLatch latch = new CountDownLatch(1);
         AtomicBoolean ok = new AtomicBoolean(false);
         GestureDescription gesture = new GestureDescription.Builder().addStroke(stroke).build();
+
         boolean accepted = dispatchGesture(gesture, new GestureResultCallback() {
             @Override
             public void onCompleted(GestureDescription gestureDescription) {
@@ -153,13 +198,17 @@ public class MacroAccessibilityService extends AccessibilityService {
             }
         }, main);
         if (!accepted) return false;
-        try {
-            latch.await(10, TimeUnit.SECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return false;
+
+        long deadline = SystemClock.uptimeMillis() + Math.max(50L, timeoutMs);
+        while (canControlRoblox() && SystemClock.uptimeMillis() < deadline) {
+            try {
+                if (latch.await(25, TimeUnit.MILLISECONDS)) return ok.get();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
         }
-        return ok.get();
+        return false;
     }
 
     private static Path line(float x1, float y1, float x2, float y2) {
@@ -169,19 +218,18 @@ public class MacroAccessibilityService extends AccessibilityService {
         return p;
     }
 
-    private static Path point(float x, float y) {
-        Path p = new Path();
-        p.moveTo(x, y);
-        p.lineTo(x + 0.01f, y + 0.01f);
-        return p;
-    }
-
-    private void sleepChecked(long ms) {
-        try {
-            Thread.sleep(ms);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+    private boolean sleepWhileRunning(long ms) {
+        long deadline = SystemClock.uptimeMillis() + Math.max(0L, ms);
+        while (running.get() && SystemClock.uptimeMillis() < deadline) {
+            long left = deadline - SystemClock.uptimeMillis();
+            try {
+                Thread.sleep(Math.min(50L, Math.max(1L, left)));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
         }
+        return running.get();
     }
 
     private void stopOverlay() {
