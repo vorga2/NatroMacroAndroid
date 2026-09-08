@@ -80,8 +80,8 @@ final class SettingsPanel extends LinearLayout {
                 number("Лимит переработки, секунды","convert_seconds",120,10,900,true);
                 toggle("Ставить спринклер после прилёта","sprinkler",false);
                 number("Допуск распознавания ориентиров (RGB)","anchor_tolerance",18,3,35,true);
-                note("Автомаршрут использует красную пушку и планер. Нужны доступ к пушке, Pine Tree и занятый улей. Возврат — через Reset Character. Перед первым циклом обучи hive, cannon, pine и empty.");
-                note("hive: фиксированный фрагмент вида от улья в направлении рампы. cannon: текст подсказки взаимодействия. pine: стабильный фрагмент после приземления, до сбора. empty/full: неизменный участок индикатора рюкзака в нужном состоянии.");break;
+                note("Автомаршрут использует красную пушку и планер. Нужны доступ к пушке, Pine Tree и занятый улей. Возврат — через Reset Character. Перед первым циклом обучи hive, cannon, pine и empty. Ориентир spawn не обязателен, но нужен для восстановления, если Reset вернул на обычную стартовую площадку.");
+                note("hive: фиксированный фрагмент вида от улья в направлении рампы. spawn: стабильный фрагмент обычного SpawnLocation. cannon: текст подсказки взаимодействия. pine: стабильный фрагмент после приземления, до сбора. empty/full: неизменный участок индикатора рюкзака в нужном состоянии.");break;
             default:
                 heading("Настройка прямо в Roblox");
                 note("Открой нужный экран игры, затем выбери калибровку. Меню исчезнет. Каждый выбор сохраняется после отпускания пальца. Кнопка × отменяет.");
@@ -89,7 +89,7 @@ final class SettingsPanel extends LinearLayout {
                 for(String[] item:new String[][]{{"interact","Кнопка взаимодействия / Make Honey"},{"menu","Кнопка меню Roblox"},{"reset","Reset Character в меню"},{"confirm","Подтверждение Reset"},{"sprinkler","Слот спринклера"}}){
                     String key=item[0];body.addView(button(item[1]+(config.point(key)?" ✓":""),()->actions.calibrate(key)));
                 }
-                for(String name:new String[]{"hive","cannon","pine","empty","full"}){
+                for(String name:new String[]{"hive","spawn","cannon","pine","empty","full"}){
                     body.addView(button("Ориентир "+name+(new ScreenAnchors(getContext()).exists(name)?" ✓":""),()->actions.calibrate("anchor:"+name)));
                 }
                 note("Для ориентира укажи два противоположных угла небольшого узнаваемого фрагмента. Не выделяй пчёл, игроков, мигающий текст или одноцветный фон. После смены разрешения обучи ориентиры заново.");
