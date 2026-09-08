@@ -39,8 +39,8 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Build unsigned debug APK
-        run: gradle --no-daemon :app:assembleDebug
+      - name: Test movement, lint, and build APK
+        run: gradle --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
 
       - name: Recreate stable development signing key
         run: python3 ci/generate_signing_key.py "$RUNNER_TEMP/natro-dev-key.pk8"
@@ -50,7 +50,7 @@ jobs:
         run: |
           set -euo pipefail
           UNSIGNED="app/build/outputs/apk/debug/app-debug-unsigned.apk"
-          SIGNED="app/build/outputs/apk/debug/NatroMacroAndroid-v0.3.2-debug.apk"
+          SIGNED="app/build/outputs/apk/debug/NatroMacroAndroid-v0.4.0-debug.apk"
           test -f "$UNSIGNED"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign \
             --key "$RUNNER_TEMP/natro-dev-key.pk8" \
@@ -62,6 +62,16 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: NatroMacroAndroid-v0.3.2-apk
-          path: app/build/outputs/apk/debug/NatroMacroAndroid-v0.3.2-debug.apk
+          name: NatroMacroAndroid-v0.4.0-apk
+          path: app/build/outputs/apk/debug/NatroMacroAndroid-v0.4.0-debug.apk
           if-no-files-found: error
+
+      - name: Upload verification reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-reports
+          path: |
+            app/build/reports/tests/
+            app/build/reports/lint-results-debug.html
+          if-no-files-found: ignore

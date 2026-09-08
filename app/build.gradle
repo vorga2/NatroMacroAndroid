@@ -10,8 +10,13 @@ android {
         applicationId 'dev.vorga.natromobile'
         minSdk 30
         targetSdk 35
-        versionCode 7
-        versionName '0.3.2'
+        versionCode 8
+        versionName '0.4.0'
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
 
     buildTypes {
@@ -20,4 +25,9 @@ android {
             signingConfig null
         }
     }
+}
+
+dependencies {
+    implementation "com.google.android.material:material:1.12.0"
+    testImplementation "junit:junit:4.13.2"
 }
