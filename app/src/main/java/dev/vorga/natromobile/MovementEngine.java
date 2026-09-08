@@ -29,8 +29,8 @@ final class MovementEngine {
         if (!Double.isFinite(tiles) || tiles < 0) throw new IllegalArgumentException("Некорректная дистанция маршрута");
         if (tiles == 0) return;
 
-        // Re-sample the current speed on bounded legs. This keeps long scripted
-        // paths from accumulating large error if the speed model changes between legs.
+        // Re-sample the speed on bounded legs. Long scripted paths therefore
+        // compensate when the speed model changes instead of using one huge delay.
         double left = tiles;
         while (left > 0.0001) {
             double leg = Math.min(4.0, left);
@@ -43,6 +43,10 @@ final class MovementEngine {
 
     void moveRaw(float x, float y, long ms, long... jumpAt) throws InterruptedException {
         touch.move(x,y,ms,false,jumpAt);
+    }
+
+    void moveRawGather(float x,float y,long ms) throws InterruptedException {
+        touch.move(x,y,ms,true);
     }
 
     void waitFor(long ms) throws InterruptedException { touch.waitFor(ms); }
