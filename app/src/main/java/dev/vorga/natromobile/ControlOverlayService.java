@@ -15,12 +15,24 @@ import android.widget.Button;
 
 public class ControlOverlayService extends Service {
     private static final String CHANNEL = "macro_control";
+    private static volatile ControlOverlayService instance;
     private WindowManager wm;
     private Button stop;
+    private volatile String state = "ARMED";
+
+    static void setState(String value) {
+        ControlOverlayService s = instance;
+        if (s == null) return;
+        s.state = value == null ? "" : value;
+        if (s.stop != null) {
+            s.stop.post(() -> s.stop.setText("STOP\n" + s.state));
+        }
+    }
 
     @Override
     public void onCreate() {
         super.onCreate();
+        instance = this;
         createChannel();
         Notification notification = new Notification.Builder(this, CHANNEL)
                 .setContentTitle("Natro Mobile running")
@@ -32,8 +44,9 @@ public class ControlOverlayService extends Service {
 
         wm = (WindowManager) getSystemService(WINDOW_SERVICE);
         stop = new Button(this);
-        stop.setText("STOP");
+        stop.setText("STOP\n" + state);
         stop.setTextColor(Color.WHITE);
+        stop.setTextSize(12);
         stop.setBackgroundColor(0xCCB00020);
         stop.setOnClickListener(v -> {
             MacroAccessibilityService svc = MacroAccessibilityService.get();
@@ -42,13 +55,13 @@ public class ControlOverlayService extends Service {
         });
 
         WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
-                220, 120,
+                300, 150,
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
                 PixelFormat.TRANSLUCENT);
         lp.gravity = Gravity.TOP | Gravity.END;
         lp.x = 20;
-        lp.y = 160;
+        lp.y = 140;
         wm.addView(stop, lp);
     }
 
@@ -61,6 +74,7 @@ public class ControlOverlayService extends Service {
 
     @Override
     public void onDestroy() {
+        if (instance == this) instance = null;
         if (wm != null && stop != null) {
             try { wm.removeView(stop); } catch (Exception ignored) {}
         }
