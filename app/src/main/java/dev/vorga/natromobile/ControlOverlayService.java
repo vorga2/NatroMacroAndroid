@@ -38,6 +38,9 @@ public class ControlOverlayService extends Service {
     private ContextThemeWrapper theme;
     static void setState(String value){ControlOverlayService s=instance;if(s!=null)s.main.post(()->{s.state=value;if(s.status!=null)s.status.setText(value);});}
     static boolean obscures(float x,float y){return bubbleBounds.contains(Math.round(x),Math.round(y));}
+    static boolean obscuresPath(float x,float y,float tx,float ty){
+        return Rect.intersects(bubbleBounds,new Rect((int)Math.min(x,tx),(int)Math.min(y,ty),(int)Math.max(x,tx)+1,(int)Math.max(y,ty)+1));
+    }
     static void hideForCalibration(){ControlOverlayService s=instance;if(s!=null)s.remove();}
     static void restore(){ControlOverlayService s=instance;if(s!=null)s.showBubble();}
     @Override public void onCreate(){
@@ -49,7 +52,9 @@ public class ControlOverlayService extends Service {
         startForeground(42,new Notification.Builder(this,"macro_control").setSmallIcon(android.R.drawable.ic_media_pause)
                 .setContentTitle("Natro • Pine Tree").setContentText("Меню поверх Roblox • STOP в любой момент")
                 .setContentIntent(open).addAction(new Notification.Action.Builder(null,"STOP",stop).build()).setOngoing(true).build());
-        if(!Settings.canDrawOverlays(this)){stopSelf();return;}showBubble();
+        if(!Settings.canDrawOverlays(this)){stopSelf();return;}
+        android.util.DisplayMetrics dm=new android.util.DisplayMetrics();wm.getDefaultDisplay().getRealMetrics(dm);
+        bubbleX=dm.widthPixels-dp(166);bubbleY=dp(8);showBubble();
     }
     @Override public int onStartCommand(Intent intent,int flags,int startId){
         if(intent!=null&&"STOP".equals(intent.getAction())){MacroAccessibilityService s=MacroAccessibilityService.get();if(s!=null)s.stopMacro();}

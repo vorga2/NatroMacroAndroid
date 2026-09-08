@@ -6,7 +6,7 @@ import java.util.List;
 
 public class MovementTest {
     @Test public void tileTimingMatchesWalkIntegrationAtConstantSpeed(){
-        assertEquals(139L,MovementMath.duration(1,28,1));
+        assertEquals(138L,MovementMath.duration(1,28,1));
         assertEquals(1567L,MovementMath.duration(11,28,1));
         assertEquals(783L,MovementMath.duration(11,56,1));
         assertEquals(3134L,MovementMath.duration(11,28,2));

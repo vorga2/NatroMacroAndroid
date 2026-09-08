@@ -17,7 +17,7 @@ final class TouchEngine {
     private final Guard guard;
     private final Handler main=new Handler(Looper.getMainLooper());
     private GestureDescription.StrokeDescription joy,tool;
-    private float joyX,joyY,toolX,toolY;
+    private float toolX,toolY;
     private final MacroConfig config;
     private final int width,height;
     TouchEngine(AccessibilityService s,Guard g,MacroConfig c,int w,int h) { service=s;guard=g;config=c;width=w;height=h; }
@@ -35,12 +35,12 @@ final class TouchEngine {
         float r=config.number("radius_n",0)*Math.min(width,height);
         float tx=cx+unit[0]*r,ty=cy+unit[1]*r;
         boolean moving=x!=0 || y!=0;
-        if(moving && (ControlOverlayService.obscures(cx,cy)||ControlOverlayService.obscures(tx,ty)))throw new IllegalStateException("Перетащи N • меню: оно перекрывает джойстик");
+        if(moving && ControlOverlayService.obscuresPath(cx,cy,tx,ty))throw new IllegalStateException("Перетащи N • меню: оно перекрывает джойстик");
         if(gather && ControlOverlayService.obscures(config.x("tool",width),config.y("tool",height)))throw new IllegalStateException("Меню перекрывает кнопку сбора");
+        if(jumpAt.length>0 && ControlOverlayService.obscures(config.x("jump",width),config.y("jump",height)))throw new IllegalStateException("Меню перекрывает кнопку прыжка");
         long elapsed=0;
         // Ramp is deliberately short and separate from the exact full-deflection hold.
         if(moving) {
-            joyX=tx;joyY=ty;
             joy=new GestureDescription.StrokeDescription(line(cx,cy,tx,ty),0,16,true);
             send(new GestureDescription.Builder().addStroke(joy).build(),16);
         }
@@ -88,7 +88,8 @@ final class TouchEngine {
         send(new GestureDescription.Builder().addStroke(new GestureDescription.StrokeDescription(point(x,y),0,ms,false)).build(),ms);
     }
     void swipe(float x,float y,float tx,float ty,long ms) throws InterruptedException {
-        check();send(new GestureDescription.Builder().addStroke(new GestureDescription.StrokeDescription(line(x,y,tx,ty),0,ms,false)).build(),ms);
+        check();if(ControlOverlayService.obscuresPath(x,y,tx,ty))throw new IllegalStateException("Перетащи меню: оно перекрывает свайп камеры");
+        send(new GestureDescription.Builder().addStroke(new GestureDescription.StrokeDescription(line(x,y,tx,ty),0,ms,false)).build(),ms);
     }
     void waitFor(long ms) throws InterruptedException {
         long end=SystemClock.uptimeMillis()+ms;
