@@ -21,12 +21,45 @@ final class TouchEngine {
     private final MacroConfig config;
     private final int width,height;
     TouchEngine(AccessibilityService s,Guard g,MacroConfig c,int w,int h) { service=s;guard=g;config=c;width=w;height=h; }
-    private static Path point(float x,float y) { Path p=new Path();p.moveTo(x,y);return p; }
-    private static Path line(float x,float y,float tx,float ty) { Path p=point(x,y);p.lineTo(tx,ty);return p; }
+
+    private Path line(float x,float y,float tx,float ty) {
+        Path p=new Path();
+        p.moveTo(x,y);
+        p.lineTo(tx,ty);
+        return p;
+    }
+
+    /**
+     * GestureDescription rejects/ignores an empty path on some Android/Samsung builds.
+     * A Path containing only moveTo() is effectively empty, so every tap gets a tiny
+     * real segment while remaining visually/physically a tap.
+     */
+    private Path pressPath(float x,float y) {
+        Path p=new Path();
+        p.moveTo(x,y);
+        float nx=(x+0.35f<width)?x+0.35f:Math.max(0f,x-0.35f);
+        p.lineTo(nx,y);
+        return p;
+    }
+
+    /**
+     * Continuations must start exactly at the previous stroke endpoint. This tiny
+     * out-and-back segment is non-empty and ends at the same coordinate, so the next
+     * continueStroke() can safely begin at x,y again.
+     */
+    private Path holdPath(float x,float y) {
+        Path p=new Path();
+        p.moveTo(x,y);
+        float nx=(x+0.35f<width)?x+0.35f:Math.max(0f,x-0.35f);
+        p.lineTo(nx,y);
+        p.lineTo(x,y);
+        return p;
+    }
 
     void move(float x,float y,long ms,boolean gather) throws InterruptedException {
         move(x,y,ms,gather,new long[0]);
     }
+
     // Jump offsets are relative to movement start. Both fingers share a GestureDescription.
     void move(float x,float y,long ms,boolean gather,long[] jumpAt) throws InterruptedException {
         check();
@@ -39,11 +72,13 @@ final class TouchEngine {
         if(gather && ControlOverlayService.obscures(config.x("tool",width),config.y("tool",height)))throw new IllegalStateException("Меню перекрывает кнопку сбора");
         if(jumpAt.length>0 && ControlOverlayService.obscures(config.x("jump",width),config.y("jump",height)))throw new IllegalStateException("Меню перекрывает кнопку прыжка");
         long elapsed=0;
+
         // Ramp is deliberately short and separate from the exact full-deflection hold.
         if(moving) {
             joy=new GestureDescription.StrokeDescription(line(cx,cy,tx,ty),0,16,true);
             send(new GestureDescription.Builder().addStroke(joy).build(),16);
         }
+
         while(elapsed<ms) {
             check();
             long chunk=Math.min(250,ms-elapsed);
@@ -53,24 +88,39 @@ final class TouchEngine {
             boolean more=elapsed+chunk<ms;
             GestureDescription.Builder b=new GestureDescription.Builder();
             int strokeCount=0;
-            if(moving) { joy=joy.continueStroke(point(tx,ty),0,chunk,more);b.addStroke(joy);strokeCount++; }
+
+            if(moving) {
+                joy=joy.continueStroke(holdPath(tx,ty),0,chunk,more);
+                b.addStroke(joy);
+                strokeCount++;
+            }
+
             if(gather) {
-                toolX=config.x("tool",width); toolY=config.y("tool",height);
+                toolX=config.x("tool",width);
+                toolY=config.y("tool",height);
                 if(config.flag("tool_hold",true)) {
-                    tool=tool==null ? new GestureDescription.StrokeDescription(point(toolX,toolY),0,chunk,more)
-                            : tool.continueStroke(point(toolX,toolY),0,chunk,more);
-                    b.addStroke(tool);strokeCount++;
+                    tool=tool==null
+                            ? new GestureDescription.StrokeDescription(holdPath(toolX,toolY),0,chunk,more)
+                            : tool.continueStroke(holdPath(toolX,toolY),0,chunk,more);
+                    b.addStroke(tool);
+                    strokeCount++;
                 } else {
                     int interval=config.integer("tool_interval",250);
                     long first=((elapsed+interval-1)/interval)*interval;
                     for(long at=first;at<elapsed+chunk;at+=interval){
-                        b.addStroke(new GestureDescription.StrokeDescription(point(toolX,toolY),at-elapsed,Math.min(45,elapsed+chunk-at),false));strokeCount++;
+                        long tapDuration=Math.max(1,Math.min(45,elapsed+chunk-at));
+                        b.addStroke(new GestureDescription.StrokeDescription(pressPath(toolX,toolY),at-elapsed,tapDuration,false));
+                        strokeCount++;
                     }
                 }
             }
+
             for(long at:jumpAt) if(at>=elapsed && at+65<=elapsed+chunk){
-                b.addStroke(new GestureDescription.StrokeDescription(point(config.x("jump",width),config.y("jump",height)),at-elapsed,65,false));strokeCount++;
+                b.addStroke(new GestureDescription.StrokeDescription(
+                        pressPath(config.x("jump",width),config.y("jump",height)),at-elapsed,65,false));
+                strokeCount++;
             }
+
             long chunkStart=SystemClock.uptimeMillis();
             if(strokeCount>0) send(b.build(),chunk);
             long rest=chunk-(SystemClock.uptimeMillis()-chunkStart);
@@ -79,58 +129,89 @@ final class TouchEngine {
             if(!more) { joy=null;tool=null; }
         }
     }
+
     void tap(String key,long duration) throws InterruptedException {
         if(!config.point(key)) throw new IllegalStateException("Откалибруй кнопку: "+key);
         tap(config.x(key,width),config.y(key,height),duration);
     }
+
     void tap(float x,float y,long ms) throws InterruptedException {
-        check();if(ControlOverlayService.obscures(x,y))throw new IllegalStateException("Перетащи N • меню: оно перекрывает кнопку");
-        send(new GestureDescription.Builder().addStroke(new GestureDescription.StrokeDescription(point(x,y),0,ms,false)).build(),ms);
+        check();
+        if(ControlOverlayService.obscures(x,y))throw new IllegalStateException("Перетащи N • меню: оно перекрывает кнопку");
+        send(new GestureDescription.Builder()
+                .addStroke(new GestureDescription.StrokeDescription(pressPath(x,y),0,Math.max(1,ms),false))
+                .build(),Math.max(1,ms));
     }
+
     void swipe(float x,float y,float tx,float ty,long ms) throws InterruptedException {
-        check();if(ControlOverlayService.obscuresPath(x,y,tx,ty))throw new IllegalStateException("Перетащи меню: оно перекрывает свайп камеры");
-        send(new GestureDescription.Builder().addStroke(new GestureDescription.StrokeDescription(line(x,y,tx,ty),0,ms,false)).build(),ms);
+        check();
+        if(ControlOverlayService.obscuresPath(x,y,tx,ty))throw new IllegalStateException("Перетащи меню: оно перекрывает свайп камеры");
+        send(new GestureDescription.Builder()
+                .addStroke(new GestureDescription.StrokeDescription(line(x,y,tx,ty),0,ms,false))
+                .build(),ms);
     }
+
     void waitFor(long ms) throws InterruptedException {
         long end=SystemClock.uptimeMillis()+ms;
-        while(SystemClock.uptimeMillis()<end) { check();Thread.sleep(Math.min(40,Math.max(1,end-SystemClock.uptimeMillis()))); }
+        while(SystemClock.uptimeMillis()<end) {
+            check();
+            Thread.sleep(Math.min(40,Math.max(1,end-SystemClock.uptimeMillis())));
+        }
     }
-    private void check() throws InterruptedException { if(!guard.allowed()) throw new InterruptedException("Stopped or Roblox lost focus"); }
+
+    private void check() throws InterruptedException {
+        if(!guard.allowed()) throw new InterruptedException("Stopped or Roblox lost focus");
+    }
+
     private void send(GestureDescription gesture,long duration) throws InterruptedException {
         check();
         CountDownLatch done=new CountDownLatch(1);
         AtomicBoolean complete=new AtomicBoolean();
         AtomicBoolean expired=new AtomicBoolean();
+
         main.post(()->{
             if(expired.get()||!guard.allowed()) {done.countDown();return;}
             boolean accepted=false;
-            try { accepted=service.dispatchGesture(gesture,new AccessibilityService.GestureResultCallback(){
-                @Override public void onCompleted(GestureDescription g) {complete.set(true);done.countDown();}
-                @Override public void onCancelled(GestureDescription g) {done.countDown();}
-            },main); } catch(RuntimeException ignored) { }
+            try {
+                accepted=service.dispatchGesture(gesture,new AccessibilityService.GestureResultCallback(){
+                    @Override public void onCompleted(GestureDescription g) {complete.set(true);done.countDown();}
+                    @Override public void onCancelled(GestureDescription g) {done.countDown();}
+                },main);
+            } catch(RuntimeException ignored) { }
             if(!accepted) done.countDown();
         });
+
         boolean signaled=done.await(duration+1800,TimeUnit.MILLISECONDS);
         expired.set(true);
         check();
-        if(!signaled || !complete.get()) throw new IllegalStateException(signaled?"Жест отменён. Проверь, что не касаешься игры во время фарма":"Android не подтвердил жест; макрос остановлен");
+        if(!signaled || !complete.get())
+            throw new IllegalStateException(signaled
+                    ? "Жест отменён Android. Не касайся игры во время выполнения и проверь службу специальных возможностей"
+                    : "Android не подтвердил жест; макрос остановлен");
     }
+
     void release(boolean robloxVisible) {
-        GestureDescription.StrokeDescription j=joy,t=tool;joy=null;tool=null;
+        GestureDescription.StrokeDescription j=joy,t=tool;
+        joy=null;
+        tool=null;
         if(!robloxVisible || (j==null && t==null)) return;
         CountDownLatch done=new CountDownLatch(1);
         main.post(()->{
             try {
                 GestureDescription.Builder b=new GestureDescription.Builder();
-                // A new gesture cancels any in-flight strokes. Only touch the calibrated joystick,
-                // never the tool (which could trigger an action when released).
-                b.addStroke(new GestureDescription.StrokeDescription(point(config.x("joy",width),config.y("joy",height)),0,1,false));
+                // A new valid short gesture cancels any in-flight strokes. Only touch
+                // the calibrated joystick, never the tool (which could trigger an action).
+                b.addStroke(new GestureDescription.StrokeDescription(
+                        pressPath(config.x("joy",width),config.y("joy",height)),0,1,false));
                 service.dispatchGesture(b.build(),new AccessibilityService.GestureResultCallback(){
                     @Override public void onCompleted(GestureDescription g){done.countDown();}
                     @Override public void onCancelled(GestureDescription g){done.countDown();}
                 },main);
-            } catch(RuntimeException e) {done.countDown();}
+            } catch(RuntimeException e) {
+                done.countDown();
+            }
         });
-        try { done.await(800,TimeUnit.MILLISECONDS); } catch(InterruptedException e) {Thread.currentThread().interrupt();}
+        try { done.await(800,TimeUnit.MILLISECONDS); }
+        catch(InterruptedException e) {Thread.currentThread().interrupt();}
     }
 }
