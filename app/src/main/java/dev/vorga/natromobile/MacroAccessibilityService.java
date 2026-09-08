@@ -50,6 +50,13 @@ public class MacroAccessibilityService extends AccessibilityService {
         worker.execute(()->{
             try {
                 config=new MacroConfig(this);anchors=new ScreenAnchors(this);
+                // The focusable settings panel has just closed. Wait for Android to
+                // return focus, without scheduling a future start that could outlive STOP.
+                long focusDeadline=SystemClock.uptimeMillis()+2000;
+                while(!isRobloxForeground()&&SystemClock.uptimeMillis()<focusDeadline){
+                    if(stop.get())throw new InterruptedException();Thread.sleep(40);
+                }
+                if(stop.get())throw new InterruptedException();
                 dimensions();
                 String error=config.validate(width,height);
                 if(error!=null)throw new IllegalStateException(error);

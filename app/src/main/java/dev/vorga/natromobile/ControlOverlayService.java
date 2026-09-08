@@ -85,7 +85,7 @@ public class ControlOverlayService extends Service {
             GradientDrawable bg=new GradientDrawable();bg.setColor(0xFF141811);bg.setCornerRadius(dp(24));container.setBackground(bg);
             status=new TextView(theme);status.setText(s==null?"Включи службу специальных возможностей":s.status());status.setTextSize(12);status.setPadding(dp(16),dp(8),dp(16),0);container.addView(status);
             SettingsPanel panel=new SettingsPanel(theme,new SettingsPanel.Actions(){
-                public void start(){showBubble();MacroAccessibilityService svc=MacroAccessibilityService.get();if(svc!=null)main.postDelayed(()->svc.startMacroAfterDelay(800),300);else Toast.makeText(ControlOverlayService.this,"Включи специальные возможности",Toast.LENGTH_LONG).show();}
+                public void start(){showBubble();MacroAccessibilityService svc=MacroAccessibilityService.get();if(svc!=null)svc.startMacroAfterDelay(800);else Toast.makeText(ControlOverlayService.this,"Включи специальные возможности",Toast.LENGTH_LONG).show();}
                 public void calibrate(String kind){remove();startService(new Intent(ControlOverlayService.this,CalibrationOverlayService.class).putExtra("kind",kind));}
                 public void testCamera(){showBubble();MacroAccessibilityService svc=MacroAccessibilityService.get();if(svc!=null)svc.testCamera();}
                 public void close(){showBubble();}
