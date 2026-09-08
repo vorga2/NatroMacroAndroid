@@ -1,52 +1,52 @@
-# NatroMacroAndroid
+# NatroMacroAndroid 0.4.0
 
-Experimental Android port of the **field-pattern / movement concepts** used by Natro Macro for Bee Swarm Simulator.
+Неофициальный Android-порт механик Natro Macro для Pine Tree в Bee Swarm Simulator. Android 11+, без root. **Кандидат для проверки на телефоне, не полный перенос всех функций Natro.**
 
-## What works in v0.1
+## Что добавлено
 
-- Native Android app; no modified Roblox APK.
-- Uses Android Accessibility `dispatchGesture()` for ordinary on-screen touch input.
-- Full-screen joystick-center calibration overlay.
-- Natro-style **Snake**, **Lines**, **Squares**, and **Stationary** pattern engine.
-- Pattern timing uses the same core assumption as Natro `Walk()`: **1 pattern tile = 4 Roblox studs**, adjusted by configured move speed.
-- Floating STOP control while the macro is active.
-- GitHub Actions debug APK build.
+- Настоящее меню Material Design 3 поверх Roblox: перетаскиваемая кнопка N, настройки и STOP.
+- Одновременные жесты джойстика и инструмента; прыжки без отпускания движения в полёте.
+- Snake, Lines, Squares, Diamonds, Slimline, e_lol и Stationary из оригинальных исходников.
+- Размер, повторы, инверсия направлений, длительность, скорость и ручные множители баффов.
+- Режим сбора с текущей позиции и проверяемый маршрут от улья через красную пушку.
+- Цикл сбора, возврата через Reset, переработки и повторного маршрута. Ориентиры обучаются на экране пользователя.
+- Остановка при отменённом жесте, потере фокуса Roblox, смене экрана, неудачном распознавании или истечении лимита переработки.
 
-## What is not implemented yet
+## Установка и первый запуск
 
-- Automatic hive -> field routes.
-- Backpack-full image detection.
-- Automatic reset / hive conversion.
-- Buff / haste computer-vision compensation.
-- Reconnect, planters, quests, mobs, dispensers, boosters, etc.
+1. Скачай APK из **Actions → Android APK → успешный запуск → Artifacts → NatroMacroAndroid-v0.4.0-apk** и установи.
+2. Разреши специальные возможности и окно поверх других приложений. На Android 13+ для APK может потребоваться «Разрешить ограниченные настройки» в системной странице приложения.
+3. Открой Bee Swarm Simulator кнопкой приложения. Меню Natro останется поверх игры.
+4. Roblox: альбомная ориентация, фиксированный джойстик, камера Classic. Не меняй чувствительность и масштаб после калибровки.
+5. N • меню → Калибровка → Управление: центр джойстика, его правый край, прыжок, инструмент. Точки выбираются при отпускании пальца. Старую трёхточечную калибровку нужно повторить.
+6. Для первого теста встань на Pine Tree, выбери «Я уже на Pine Tree», Snake, размер .5, 1 повтор, время 30 с. Нажми «Запустить» и не касайся игры до остановки.
 
-So v0.1 is meant to be started **while your character is already standing in the field and facing the intended direction**.
+Меню можно перетаскивать за N. Открытие меню останавливает текущий запуск; «Свернуть» не возобновляет его. Настройки можно сохранить и запустить снова прямо в Roblox. STOP есть на плавающей панели и в уведомлении.
 
-## Safety / account risk
+## Автомаршрут и циклы
 
-This project deliberately does **not** inject into Roblox, read or patch Roblox memory, use script executors, modify the Roblox client, or attempt to bypass anti-cheat. It only automates normal touch gestures through Android accessibility APIs.
+Нужны занятый улей, доступ к Pine Tree, красной пушке и планер. Выбери реальный номер улья.
 
-That does **not** mean a ban can be guaranteed impossible. Automated gameplay can still violate game/platform rules, and detection policies can change.
+- Откалибруй кнопки `interact`, `menu`, `reset`, `confirm` на соответствующих экранах Roblox. Сначала открой нужное окно игры, затем меню Natro и выбор точки.
+- Во вкладке «Движение» подбери длину свайпа так, чтобы тест поворачивал камеру ровно на 45°. Подтверди переключателем.
+- Обучи `hive`: стабильный узнаваемый фрагмент вида от своего улья в сторону рампы. Не включай движущихся пчёл/игроков.
+- Обучи `cannon`: стабильный текст подсказки взаимодействия у красной пушки. Кнопка `interact` должна нажимать именно мобильную подсказку, также используемую для Make Honey.
+- Обучи `pine`: стабильный фрагмент сцены после приземления и разворота к полю, до начала паттерна.
+- Обучи `empty`: участок пустого индикатора рюкзака. Для остановки по заполнению обучи `full` на полном рюкзаке. Не выделяй меняющиеся цифры.
+- Выбери старт от улья; для повторного фарма включи циклы. При нераспознанном ориентире макрос остановится с причиной в меню.
 
-## Build
+Меняющиеся Haste и другие баффы пока не распознаются автоматически. Параметры баффов задаются вручную, поэтому длинный автономный фарм требует дальнейшей проверки и реализации компенсации дрейфа. Сбор, полёт и повторные циклы должны быть проверены на реальном телефоне.
 
-GitHub Actions builds on every push to `main` and on manual `workflow_dispatch`.
+## Сборка
 
-Locally, with Android SDK + JDK 17 + Gradle 8.9:
+JDK 17, Android SDK 35, Gradle 8.9:
 
-```bash
-gradle :app:assembleDebug
+```sh
+gradle :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
 ```
 
-APK output:
+CI подписывает APK тем же сертификатом разработки, что и 0.3.2. Локальная debug-сборка остаётся неподписанной до шага подписи.
 
-```text
-app/build/outputs/apk/debug/app-debug.apk
-```
+[Разбор исходников, соответствие оригиналу и ограничения](docs/PORTING.md).
 
-## Attribution
-
-Pattern behavior was studied from the open-source Natro Macro project by Natro Team:
-https://github.com/NatroTeam/NatroMacro
-
-Natro Macro is GPL-3.0 licensed. This port is intended to remain open-source and compatible with those obligations when derivative Natro material is incorporated.
+Исходник: [NatroTeam/NatroMacro](https://github.com/NatroTeam/NatroMacro), ревизия `094f9c7`. Лицензия GPL-3.0, полный текст в LICENSE. Неофициальный проект, не выпуск Natro Team.

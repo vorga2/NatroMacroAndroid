@@ -1,7 +1,9 @@
-# Notice
+NatroMacroAndroid is an unofficial Android adaptation, not an official Natro Team release.
 
-Natro Mobile is an unofficial community prototype and is not endorsed by Natro Team, Roblox Corporation, or Bee Swarm Simulator's developer.
+This project is distributed under GNU GPL version 3; see LICENSE.
+MovementMath, PatternFactory and Pine Tree route sequences are derived from Natro Macro,
+Copyright Natro Team and contributors, https://github.com/NatroTeam/NatroMacro.
+Studied upstream revision: 094f9c7b97e27f05e23f04beebecb7396bff5fd9.
 
-Movement/pattern/path logic derived from NatroTeam/NatroMacro is used under GNU GPL v3.0. Copyright in the original Natro source remains with its authors.
-
-The project intentionally contains no exploit executor, game-process injection, Roblox memory access, packet manipulation, anti-cheat bypass, or ban-evasion mechanism.
+Original source references, Android translation decisions, and limitations: docs/PORTING.md.
+Material Components for Android is licensed under Apache-2.0.
