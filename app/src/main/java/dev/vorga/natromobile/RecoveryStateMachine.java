@@ -37,6 +37,8 @@ final class RecoveryStateMachine {
             if(!vision.exists(marker)) throw new IllegalStateException("Обучи ориентир «"+marker+"»");
         if(!config.flag("camera_calibrated",false))
             throw new IllegalStateException("Откалибруй поворот камеры на 45°");
+        if(config.flag("sprinkler",false)&&!config.point("sprinkler"))
+            throw new IllegalStateException("Откалибруй слот спринклера");
     }
 
     void resetToHive() throws Exception {
@@ -163,6 +165,12 @@ final class RecoveryStateMachine {
                 PathStep.waitMs("PINE • SETTLE",2000),
                 PathStep.require("PINE • VERIFY","pine",2,1800)
         ));
+
+        if(config.flag("sprinkler",false)) {
+            status.set("PINE • SPRINKLER");
+            movement.tap("sprinkler",80);
+            movement.waitFor(500);
+        }
     }
 
     void convertAtHive() throws Exception {
