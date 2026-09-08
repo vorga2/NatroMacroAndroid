@@ -24,6 +24,7 @@ import android.widget.Toast;
 
 public class MainActivity extends Activity {
     private Spinner pattern;
+    private Spinner hiveSlot;
     private EditText speed;
     private EditText size;
     private EditText reps;
@@ -43,15 +44,15 @@ public class MainActivity extends Activity {
     }
 
     private View buildUi() {
+        SharedPreferences p = getSharedPreferences("config", MODE_PRIVATE);
         ScrollView scroll = new ScrollView(this);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(36, 48, 36, 48);
         scroll.addView(root);
 
-        TextView title = text("Natro Mobile", 30, true);
-        root.addView(title);
-        root.addView(text("Android prototype using ordinary Accessibility touch gestures. No injection, executor, memory editing or anti-cheat bypass.", 15, false));
+        root.addView(text("Natro Mobile — Pine Tree", 28, true));
+        root.addView(text("Natro-style route: inspect/align at hive → ramp → red cannon → glider → Pine Tree → gather pattern.", 15, false));
 
         status = text("", 15, false);
         status.setPadding(0, 24, 0, 24);
@@ -62,34 +63,44 @@ public class MainActivity extends Activity {
             Intent i = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName()));
             startActivity(i);
         }));
-        root.addView(button("3. Open Roblox for calibration", v -> openRoblox()));
-        root.addView(button("4. Calibrate joystick center", v -> calibrate()));
+        root.addView(button("3. Open Roblox", v -> openRoblox()));
+        root.addView(button("4. Calibrate controls (joystick + jump)", v -> calibrate()));
 
-        root.addView(label("Pattern"));
+        root.addView(label("Hive slot"));
+        hiveSlot = new Spinner(this);
+        String[] slots = {"1", "2", "3", "4", "5", "6"};
+        hiveSlot.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, slots));
+        hiveSlot.setSelection(Math.max(0, Math.min(5, p.getInt("hive_slot", 1) - 1)));
+        root.addView(hiveSlot);
+
+        root.addView(label("Pine Tree gather pattern"));
         pattern = new Spinner(this);
         String[] items = {"Snake", "Lines", "Squares", "Stationary"};
         pattern.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, items));
+        String savedPattern = p.getString("pattern", "Snake");
+        for (int i = 0; i < items.length; i++) if (items[i].equals(savedPattern)) pattern.setSelection(i);
         root.addView(pattern);
 
-        speed = numberField("28");
-        size = numberField("1.0");
-        reps = numberField("3");
-        seconds = numberField("900");
-        root.addView(label("Base move speed (studs/sec)")); root.addView(speed);
+        speed = numberField(String.valueOf(p.getFloat("movespeed", 28f)));
+        size = numberField(String.valueOf(p.getFloat("pattern_size", 1f)));
+        reps = numberField(String.valueOf(p.getInt("pattern_reps", 3)));
+        seconds = numberField(String.valueOf(p.getInt("run_seconds", 900)));
+        root.addView(label("Base move speed")); root.addView(speed);
         root.addView(label("Pattern size")); root.addView(size);
         root.addView(label("Pattern repetitions")); root.addView(reps);
-        root.addView(label("Run duration (seconds)")); root.addView(seconds);
+        root.addView(label("Gather duration (seconds)")); root.addView(seconds);
 
-        Button start = button("START in Roblox (5 sec delay)", v -> startMacro());
+        Button start = button("START NATRO → PINE TREE", v -> startMacro());
         start.setTextSize(18);
         root.addView(start);
 
-        root.addView(text("Current v0.1 is a field-pattern engine. Start while standing in the field and facing the intended direction. Automatic hive travel/conversion is not enabled yet.", 14, false));
+        root.addView(text("Important: select the same hive slot you actually claimed. Calibration is three taps while Roblox is visible: joystick center, joystick right edge, then jump button.", 14, false));
         return scroll;
     }
 
     private void startMacro() {
-        if (MacroAccessibilityService.get() == null) {
+        MacroAccessibilityService svc = MacroAccessibilityService.get();
+        if (svc == null) {
             toast("Enable Natro Mobile in Accessibility first.");
             return;
         }
@@ -97,13 +108,17 @@ public class MainActivity extends Activity {
             toast("Allow display over other apps first.");
             return;
         }
+
         SharedPreferences p = getSharedPreferences("config", MODE_PRIVATE);
-        if (p.getInt("joy_x", -1) < 0) {
-            toast("Calibrate joystick center first.");
+        if (p.getInt("joy_x", -1) < 0 || p.getInt("jump_x", -1) < 0 || p.getInt("joy_radius", -1) < 0) {
+            toast("Run the new 3-step controls calibration first.");
             return;
         }
+
         try {
             p.edit()
+                    .putInt("hive_slot", Integer.parseInt(hiveSlot.getSelectedItem().toString()))
+                    .putString("field", "Pine Tree")
                     .putString("pattern", pattern.getSelectedItem().toString())
                     .putFloat("movespeed", Float.parseFloat(speed.getText().toString()))
                     .putFloat("pattern_size", Float.parseFloat(size.getText().toString()))
@@ -121,9 +136,9 @@ public class MainActivity extends Activity {
 
         Intent overlay = new Intent(this, ControlOverlayService.class);
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(overlay); else startService(overlay);
-        MacroAccessibilityService.get().startMacroAfterDelay(5000);
+        svc.startMacroAfterDelay(2000);
         openRoblox();
-        toast("Macro starts in 5 seconds.");
+        toast("Natro armed. It will inspect the hive and route to Pine Tree.");
     }
 
     private void calibrate() {
@@ -147,10 +162,12 @@ public class MainActivity extends Activity {
 
     private void updateStatus() {
         SharedPreferences p = getSharedPreferences("config", MODE_PRIVATE);
-        boolean calibrated = p.getInt("joy_x", -1) >= 0;
+        boolean calibrated = p.getInt("joy_x", -1) >= 0
+                && p.getInt("joy_radius", -1) >= 0
+                && p.getInt("jump_x", -1) >= 0;
         status.setText("Accessibility: " + (MacroAccessibilityService.get() != null ? "ON" : "OFF")
                 + "\nOverlay: " + (Settings.canDrawOverlays(this) ? "ON" : "OFF")
-                + "\nJoystick calibrated: " + (calibrated ? "YES" : "NO"));
+                + "\nControls calibrated: " + (calibrated ? "YES" : "NO"));
     }
 
     private TextView label(String s) {
