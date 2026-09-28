@@ -28,13 +28,13 @@ final class TouchEngine {
     // This bound keeps STOP/focus-loss latency reasonable even for raw cannon/glider holds.
     private static final long MAX_HOLD_SLICE_MS = 700;
 
-    private final AccessibilityService service;
+    private final MacroAccessibilityService service;
     private final Guard guard;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final MacroConfig config;
     private final int width, height;
 
-    TouchEngine(AccessibilityService s, Guard g, MacroConfig c, int w, int h) {
+    TouchEngine(MacroAccessibilityService s, Guard g, MacroConfig c, int w, int h) {
         service = s;
         guard = g;
         config = c;
@@ -214,6 +214,7 @@ final class TouchEngine {
             throw new IllegalStateException(signaled
                     ? "Жест отменён Android. Проверь Accessibility и не касайся игры во время движения"
                     : "Android не подтвердил удержание джойстика");
+        service.markProgress();
     }
 
     /** All movement strokes are finite slices, so there is no continuation pointer to release. */

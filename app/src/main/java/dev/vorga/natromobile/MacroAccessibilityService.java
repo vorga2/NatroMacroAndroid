@@ -47,12 +47,18 @@ public class MacroAccessibilityService extends AccessibilityService {
     private VisionEngine vision;
     private PathEngine paths;
     private RecoveryStateMachine recovery;
+    private MacroWatchdog watchdog;
 
     static MacroAccessibilityService get(){return instance;}
 
     @Override protected void onServiceConnected(){
         super.onServiceConnected();
         instance=this;
+        SessionLog.init(getApplicationContext());
+        watchdog=new MacroWatchdog(()->{
+            SessionLog.e("Watchdog tripped — stopping stuck macro");
+            stopMacro();
+        });
     }
 
     @Override public void onAccessibilityEvent(AccessibilityEvent event){ }
@@ -61,6 +67,7 @@ public class MacroAccessibilityService extends AccessibilityService {
 
     @Override public void onDestroy(){
         stopMacro();
+        if(watchdog!=null)watchdog.stop();
         if(instance==this)instance=null;
         worker.shutdownNow();
         super.onDestroy();
@@ -68,11 +75,25 @@ public class MacroAccessibilityService extends AccessibilityService {
 
     boolean isRunningMacro(){return busy.get();}
     String status(){return state;}
-    void stopMacro(){stop.set(true);}
+    void stopMacro(){
+        if(busy.get())SessionLog.i("STOP requested");
+        stop.set(true);
+    }
+
+    /**
+     * Watchdog progress marker: successful gestures (TouchEngine), successful
+     * screenshots and state changes all count as "alive and doing things".
+     */
+    void markProgress(){
+        MacroWatchdog w=watchdog;
+        if(w!=null)w.progress();
+    }
 
     void startMacroAfterDelay(long delay){
         if(!busy.compareAndSet(false,true))return;
         stop.set(false);
+        if(watchdog!=null)watchdog.start();
+        SessionLog.i("MACRO START (delay="+delay+"ms)");
 
         worker.execute(()->{
             int completed=0;
@@ -139,6 +160,8 @@ public class MacroAccessibilityService extends AccessibilityService {
                 paths=null;
                 recovery=null;
                 busy.set(false);
+                if(watchdog!=null)watchdog.stop();
+                SessionLog.i("MACRO END • "+state);
                 ControlOverlayService.setState(state);
             }
         });
@@ -319,11 +342,15 @@ public class MacroAccessibilityService extends AccessibilityService {
         }finally{
             synchronized(out){expired.set(true);}
         }
-        return out.get();
+        Bitmap bitmap=out.get();
+        if(bitmap!=null)markProgress();
+        return bitmap;
     }
 
     private void setState(String value){
         state=value;
+        SessionLog.i("STATE "+value);
+        markProgress();
         ControlOverlayService.setState(value);
     }
 }
