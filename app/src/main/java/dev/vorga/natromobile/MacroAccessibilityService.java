@@ -45,6 +45,8 @@ public class MacroAccessibilityService extends AccessibilityService {
     private volatile int activeJoyX = -1;
     private volatile int activeJoyY = -1;
 
+    private MacroWatchdog watchdog;
+
     private enum SpawnLocation { HIVE, SPAWN, UNKNOWN }
 
     private static final class ScanResult {
@@ -64,6 +66,11 @@ public class MacroAccessibilityService extends AccessibilityService {
     protected void onServiceConnected() {
         super.onServiceConnected();
         instance = this;
+        SessionLog.init(getApplicationContext());
+        watchdog = new MacroWatchdog(() -> {
+            SessionLog.e("Watchdog tripped — stopping stuck macro");
+            stopMacro();
+        });
         if (hasRobloxWindow()) lastRobloxSeenAt = SystemClock.uptimeMillis();
     }
 
@@ -82,6 +89,7 @@ public class MacroAccessibilityService extends AccessibilityService {
     @Override
     public void onDestroy() {
         stopMacro();
+        if (watchdog != null) watchdog.stop();
         if (instance == this) instance = null;
         worker.shutdownNow();
         super.onDestroy();
@@ -93,6 +101,8 @@ public class MacroAccessibilityService extends AccessibilityService {
             return;
         }
         robloxSessionActive = false;
+        if (watchdog != null) watchdog.start();
+        SessionLog.i("MACRO START (delay=" + delayMs + "ms)");
         worker.execute(() -> {
             try {
                 state("ARMED — WAIT ROBLOX");
@@ -111,6 +121,8 @@ public class MacroAccessibilityService extends AccessibilityService {
             } finally {
                 running.set(false);
                 robloxSessionActive = false;
+                if (watchdog != null) watchdog.stop();
+                SessionLog.i("MACRO END");
                 state("STOPPED");
                 stopOverlay();
             }
@@ -120,7 +132,11 @@ public class MacroAccessibilityService extends AccessibilityService {
     void stopMacro() {
         boolean wasRunning = running.getAndSet(false);
         robloxSessionActive = false;
-        if (wasRunning && hasRobloxWindow()) cancelActiveJoystickGesture();
+        if (watchdog != null) watchdog.stop();
+        if (wasRunning) {
+            SessionLog.i("STOP requested");
+            if (hasRobloxWindow()) cancelActiveJoystickGesture();
+        }
         state("STOPPED");
     }
 
@@ -592,8 +608,11 @@ public class MacroAccessibilityService extends AccessibilityService {
         if (!accepted) return false;
         try {
             boolean signalled = latch.await(Math.max(250L, timeoutMs), TimeUnit.MILLISECONDS);
-            if (!signalled) return running.get() && hasRobloxWindow();
-            return completed.get() && running.get() && hasRobloxWindow();
+            boolean ok = signalled
+                    ? (completed.get() && running.get() && hasRobloxWindow())
+                    : (running.get() && hasRobloxWindow());
+            if (ok) markProgress();
+            return ok;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return false;
@@ -679,7 +698,9 @@ public class MacroAccessibilityService extends AccessibilityService {
         } catch (Exception e) {
             return null;
         }
-        return out.get();
+        Bitmap b = out.get();
+        if (b != null) markProgress();
+        return b;
     }
 
     private void cancelActiveJoystickGesture() {
@@ -718,13 +739,27 @@ public class MacroAccessibilityService extends AccessibilityService {
     }
 
     private boolean fail(String message) {
+        SessionLog.e("FAIL " + message);
         state("ERROR — " + message);
         toast(message);
         sleepRunning(3200L);
         return false;
     }
 
-    private void state(String s) { ControlOverlayService.setState(s); }
+    private void state(String s) {
+        ControlOverlayService.setState(s);
+        SessionLog.i("STATE " + s);
+        markProgress();
+    }
+
+    /**
+     * Watchdog progress marker: gesture completions, successful screenshots
+     * and state changes all count as "the macro is alive and doing things".
+     */
+    private void markProgress() {
+        MacroWatchdog w = watchdog;
+        if (w != null) w.progress();
+    }
     private void toast(String s) { main.post(() -> Toast.makeText(getApplicationContext(), s, Toast.LENGTH_LONG).show()); }
     private void stopOverlay() {
         try { stopService(new Intent(this, ControlOverlayService.class)); } catch (Exception ignored) {}

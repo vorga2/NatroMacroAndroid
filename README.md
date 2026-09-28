@@ -2,7 +2,7 @@
 
 Experimental Android port of the **field-pattern / movement concepts** used by Natro Macro for Bee Swarm Simulator.
 
-## What works in v0.3.2
+## What works in v0.4.0
 
 Full automated **Pine Tree cycle**: reset → hive respawn → red cannon → flight → gather.
 
@@ -21,6 +21,8 @@ Full automated **Pine Tree cycle**: reset → hive respawn → red cannon → fl
   Pattern timing uses the same core assumption as Natro `Walk()`: **1 pattern tile = 4 Roblox studs**, scaled by configured move speed.
 - Calibration overlays for joystick center/radius and jump button; floating STOP overlay (foreground service).
 - Robustness fixes for Samsung / OneUI window noise and foreground detection.
+- **Session log** (`macro-session.log` in the app's external files dir, auto-rotated at 512 KB): every state change, failure, start/stop — for post-mortem of any session.
+- **Watchdog**: stops the macro if there is no measurable progress (gestures/screenshots/state changes) for 10 minutes, guarding against pathological stalls.
 - CI builds a **stably signed** debug APK (reproducible dev key) on every push.
 
 ## Not implemented yet
