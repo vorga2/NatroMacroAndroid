@@ -2,7 +2,7 @@ name: Android APK
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "capture-on-demand" ]
   pull_request:
   workflow_dispatch:
 
@@ -16,7 +16,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -28,9 +28,6 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # The runner image already ships the Android SDK under $ANDROID_HOME.
-      # android-actions/setup-android@v3 is no longer used: it fails upstream
-      # trying to install the retired 'tools' package.
       - name: Install Android 35 platform and build-tools
         shell: bash
         run: |
@@ -48,13 +45,13 @@ jobs:
             exit 1
           fi
           echo "Using $SDKMANAGER"
-          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Set up Gradle 8.9
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.9'
+          gradle-version: '8.14.3'
 
       - name: Build unsigned debug APK
         run: gradle --no-daemon :app:assembleDebug
@@ -66,8 +63,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          UNSIGNED="app/build/outputs/apk/debug/app-debug-unsigned.apk"
-          SIGNED="app/build/outputs/apk/debug/NatroMacroAndroid-v0.6.0-debug.apk"
+          DEBUG_DIR="app/build/outputs/apk/debug"
+          if [ -f "$DEBUG_DIR/app-debug-unsigned.apk" ]; then
+            UNSIGNED="$DEBUG_DIR/app-debug-unsigned.apk"
+          else
+            UNSIGNED="$DEBUG_DIR/app-debug.apk"
+          fi
+          SIGNED="$DEBUG_DIR/NatroMacroAndroid-v0.6.0-debug.apk"
           test -f "$UNSIGNED"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign \
             --key "$RUNNER_TEMP/natro-dev-key.pk8" \

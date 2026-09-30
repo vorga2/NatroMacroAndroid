@@ -1,4 +1,4 @@
 <resources>
-    <string name="app_name">Natro Mobile</string>
-    <string name="accessibility_service_description">Runs calibrated touch gestures for Natro-style field patterns.</string>
+    <string name="app_name">Natro Macro</string>
+    <string name="accessibility_desc">Injects the same stick, camera and button gestures the macro and the D-pad share.</string>
 </resources>
